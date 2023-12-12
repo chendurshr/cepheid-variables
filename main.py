@@ -12,6 +12,8 @@ from astropy.visualization import ZScaleInterval, ImageNormalize
 from regions import CirclePixelRegion, PixCoord
 import numpy as np
 import os
+from scipy.signal import lombscargle
+pixel_area = 0.099595926**2
 
 
 def region_coord(reg_list):
@@ -64,34 +66,44 @@ def data_gen(fits_list):
 
 
 def region_data(reg_data, region_coord, image_date):
-
+    count = 0
+    previous_region_data = np.array([0])
+    region_data = np.array([1])
     regional_flux_list = []
     for image in range(reg_data.shape[0]):
-        # Extract the corresponding set of (x, y, radius) from array_3d
         image_regions = region_coord[image]
 
-        # Perform operations on set_xyzr based on the corresponding data set
         current_data_set = reg_data[image]
         n = image_regions[:, 0]
         x = image_regions[:, 1]
         y = image_regions[:, 2]
         r = image_regions[:, 3]
+        previous_region_data = None
+
         for n_val, x_val, y_val, r_val in zip(n, x, y, r):
             x_val = float(x_val)
             y_val = float(y_val)
             r_val = float(r_val)
-            center_pix = PixCoord(x_val-1, y_val-1)
-            radius_pix = 0.75 * r_val
-            circle_region = CirclePixelRegion(
-                center=center_pix, radius=radius_pix)
-            # Extract data within the circular region
 
-            region_data = circle_region.to_mask(
-                mode='subpixels').cutout(current_data_set)
-            region_uncertainty = circle_region.to_mask(
-                mode='subpixels').cutout(current_data_set)
+            max_iterations = 100
+            for iteration in range(max_iterations):
+                radius_pix = 0.72 * r_val
+
+                center_pix = PixCoord(x_val - 1, y_val - 1)
+
+                circle_region = CirclePixelRegion(
+                    center=center_pix, radius=radius_pix)
+
+                region_data = circle_region.to_mask(
+                    mode='subpixels').cutout(current_data_set)
+
+                if not np.array_equal(region_data, previous_region_data):
+                    break
+
+                r_val *= 1.1
 
             regional_flux_list.append((str(n_val), region_data))
+            previous_region_data = np.array(region_data)
     return regional_flux_list
 
 
@@ -117,6 +129,17 @@ def plot(region_data, image_date):
             n_val + f" Day: {image_date[int(count)]:1.0f}")
 
         plt.show()
+
+
+def background(c1, c2):
+    if np.sum(c2) > np.sum(c1):
+        bg = (np.sum(c2)-np.sum(c1))/(np.size(c2)-np.size(c1))
+        return bg
+    elif np.sum(c2) < np.sum(c1):
+        bg = np.mean(c2)
+        return bg
+    else:
+        bg = 0
 
 
 fits_dir = r"C:\Users\chend\Desktop\Projects\CepheidVariables"
@@ -160,47 +183,18 @@ chip3_region_data = region_data(chip3_data, chip3_region_coord, chip2_dates)
 chip2_pairs = pair(chip2_region_data)
 chip3_pairs = pair(chip3_region_data)
 
+chip2sums = [(np.sum(c1), np.sum(c2)) for n1, c1, c2 in chip2_pairs]
+chip2_background_adjusted_data = [(n1, (np.mean(c1) -
+                                   background(c1, c2))/pixel_area) for n1, c1, c2 in chip2_pairs]
+chip3_background_adjusted_data = [(n1, (np.mean(c1) -
+                                   background(c1, c2))/pixel_area) for n1, c1, c2 in chip3_pairs]
 
-# lombsceargle
+chip2_app_mag = [(n1, (np.log(1000/count) + 22.57))
+                 for n1, count in chip2_background_adjusted_data]
+chip3_app_mag = [(n1, (np.log(1000/count) + 22.57))
+                 for n1, count in chip3_background_adjusted_data]
+
+
 # =============================================================================
-#
-# for x, y, r in zip(x_array, y_array, radius_array):
-#     center_pix = PixCoord(x-1, y-1)
-#     radius_pix = 0.75*r  # Specify the radius in pixels
-#     circle_region = CirclePixelRegion(center=center_pix, radius=radius_pix)
-#
-#     # Extract data within the circular region
-#     region_data = circle_region.to_mask(mode='subpixels').cutout(data)
-#     region_uncertainty = circle_region.to_mask(mode='subpixels').cutout(data)
-#     zscale = ZScaleInterval()
-#     norm = ImageNormalize(region_data, interval=zscale)
-#
-#     plt.imshow(region_data, origin='lower', cmap='viridis', norm=norm)
-#     plt.title((x, y))
-#     plt.show()
-#     print(np.sum(region_data))
-#     flux_list.append(region_data)
-#
-# flux_pairs = []
-# for i in range(0, len(flux_list), 2):
-#     flux_pairs.append((flux_list[i], flux_list[i+1]))
-#
-#
-# def background(c1, c2):
-#     if np.sum(c2) > np.sum(c1):
-#         bg = (np.sum(c2)-np.sum(c1))/(np.size(c2)-np.size(c1))
-#         return bg
-#     elif np.sum(c2) < np.sum(c1):
-#         bg = np.mean(c2)
-#         return bg
-#     else:
-#         bg = 0
-#
-#
-# background_set = [background(i[0], i[1]) for i in flux_pairs]
-#
-# star_flux_set = []
-#
-# # for i in range(len(background_set)):
-# #  star_flux.append
+# lombscargle
 # =============================================================================

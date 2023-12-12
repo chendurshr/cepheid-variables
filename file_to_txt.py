@@ -14,7 +14,8 @@ def convert_files(input_folder, output_folder):
         os.makedirs(output_folder)
 
     # Get a list of all files without extensions in the input folder
-    files_to_convert = [f for f in os.listdir(input_folder) if '.' not in f]
+    files_to_convert = [f for f in os.listdir(
+        input_folder) if '.' not in f and f.startswith("3")]
 
     # Iterate over each file and convert it
     for file_name in files_to_convert:
