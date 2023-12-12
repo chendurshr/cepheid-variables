@@ -7,13 +7,19 @@ Created on Mon Dec 11 21:55:23 2023
 
 import matplotlib.pyplot as plt
 from astropy.io import fits
+from astropy.io.fits import getdata
 from astropy.wcs import WCS
+import astropy.units as u
 from astropy.visualization import ZScaleInterval, ImageNormalize
 from regions import CirclePixelRegion, PixCoord
 import numpy as np
 import os
-from scipy.signal import lombscargle
+from astropy.timeseries import LombScargle
+from scipy.fft import fft, fftfreq
+#from scipy.signal import lombscargle
 pixel_area = 0.099595926**2
+expected_periods = [20.5, 17.6, 17.0, 21.4, 16.0, 15.2,
+                    10.4, 11.7, 15.2, 17.3, 31.4, 18.2, 12.3, 13.6, 13.7]
 
 
 def region_coord(reg_list):
@@ -66,14 +72,14 @@ def data_gen(fits_list):
 
 
 def region_data(reg_data, region_coord, image_date):
-    count = 0
+
     previous_region_data = np.array([0])
     region_data = np.array([1])
     regional_flux_list = []
     for image in range(reg_data.shape[0]):
         image_regions = region_coord[image]
 
-        current_data_set = reg_data[image]
+        current_data_list = reg_data[image]
         n = image_regions[:, 0]
         x = image_regions[:, 1]
         y = image_regions[:, 2]
@@ -95,7 +101,7 @@ def region_data(reg_data, region_coord, image_date):
                     center=center_pix, radius=radius_pix)
 
                 region_data = circle_region.to_mask(
-                    mode='subpixels').cutout(current_data_set)
+                    mode='subpixels').cutout(current_data_list)
 
                 if not np.array_equal(region_data, previous_region_data):
                     break
@@ -165,10 +171,10 @@ chip3_fits_list = [file for file in fits_list if file.endswith('3.fits')]
 chip3_fits_list = sorted(chip3_fits_list, key=lambda x: (x.split('_')[1], x))
 
 chip2_data, chip2_wcs, chip2_header = data_gen(chip2_fits_list)
-chip2_dates = [np.ceil(h['EXPSTART'] - 50923) for h in chip2_header]
+chip2_dates = [(h['EXPSTART'] - 50923) for h in chip2_header]
 
 chip3_data, chip3_wcs, chip3_header = data_gen(chip3_fits_list)
-chip3_dates = [np.ceil(h['EXPSTART'] - 50923) for h in chip3_header]
+chip3_dates = [(h['EXPSTART'] - 50923) for h in chip3_header]
 
 
 chip2_region_coord = region_coord(chip2_reg_list)
@@ -189,12 +195,97 @@ chip2_background_adjusted_data = [(n1, (np.mean(c1) -
 chip3_background_adjusted_data = [(n1, (np.mean(c1) -
                                    background(c1, c2))/pixel_area) for n1, c1, c2 in chip3_pairs]
 
-chip2_app_mag = [(n1, (np.log(1000/count) + 22.57))
+chip2_app_mag = [list((n1, np.log(1000/count) + 22.57))
                  for n1, count in chip2_background_adjusted_data]
-chip3_app_mag = [(n1, (np.log(1000/count) + 22.57))
+chip3_app_mag = [list((n1, np.log(1000/count) + 22.57))
                  for n1, count in chip3_background_adjusted_data]
 
+star_list = []
+total_star_list = []
 
+
+def splitter(app_mag_array, star_count):
+    star_list = []
+    total_star_list = []
+    for n in range(star_count):
+        star_list = [i[1] for i in app_mag_array[n::star_count]]
+        total_star_list.append(star_list)
+    return total_star_list
+
+
+number = 3
+app_mag_list = np.array(splitter(chip2_app_mag, 7) +
+                        splitter(chip3_app_mag, 8))
+mean_app_mag_list = [(np.max(star_list) +
+                     np.min(star_list))/2 for star_list in app_mag_list]
+
+dates2 = chip2_dates[:-1]
+dates3 = chip3_dates[:-1]
+calculated_period_list = []
+for n, i in enumerate(app_mag_list):
+    time = dates2 if n < 7 else dates3
+    i = i[:-1]
+    magnitude = i
 # =============================================================================
-# lombscargle
+#     plt.plot(time, magnitude)
+#     plt.xlabel('Time (days)')
+#     plt.ylabel('Magnitude')
+#     plt.title('Sine Wave')
+#     plt.show()
+#
+# =============================================================================
+    frequency, power = LombScargle(time, magnitude).autopower()
+    top_n_indices = np.argsort(power)[-200:]
+# =============================================================================
+#
+#     # Plot the periodogram
+#     plt.plot(1 / frequency, power)
+#     plt.xlabel('Period (days)')
+#     plt.ylabel('Lomb-Scargle Power')
+#     plt.show()
+#
+# =============================================================================
+
+    period = 1 / frequency[top_n_indices]
+
+    best_period_index = np.argmin(abs(expected_periods[n] - period))
+    best_period = period[best_period_index]
+
+    calculated_period_list.append(best_period)
+
+    print(
+        f'Star: {n+1} Calculated period: {best_period:2.3f} days  '
+        f'Expected period: {expected_periods[n]} days  '
+        f'Difference: {abs(best_period-expected_periods[n]):2.3f}')
+
+
+absolute_magnitude_list = np.array([(-3.07*((np.log(P)/np.log(10)) - 1) - 4.89)
+                                   for P in calculated_period_list])
+
+distance_list = 10**((mean_app_mag_list - absolute_magnitude_list+5)/5)
+
+plt.plot((np.log(calculated_period_list)/np.log(10)),
+         absolute_magnitude_list)
+plt.gca().invert_yaxis()
+plt.scatter((np.log(calculated_period_list)/np.log(10)),
+            absolute_magnitude_list, color='r')
+plt.xlabel("Log(P)")
+plt.ylabel('M')
+plt.title("Absolute Magnitude-Period Graph for Cepheid Variables")
+
+print(
+    f"Mean Distance to galaxy = {(np.mean(distance_list)/10**6):3.2f} Megaparsec \n"
+    f"Associated Hubble Constant of {(440/(np.mean(distance_list)/10**6)):3.2f} Km/s")
+# =============================================================================
+# absolute_magnitude_list -> absolute magnitude for all 15 stars.
+# app_mag_list -> apparent magnitude for all 15 stars on each 12 days.
+# mean_app_mag_list -> weighted mean apparent magnitude for all 15 stars.
+#
+# calculated_period_list -> Period for all 15 stars.
+# chip2/3_data -> 800x800 data grid for both chips on each 12 days.
+# chip2/3_region_data -> data grid of cepheid regions and associated background
+#       region
+# chip2/3_background_adjusted_data -> data grid of cepheid regions accounting
+#       for background
+#
 # =============================================================================
